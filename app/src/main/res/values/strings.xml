@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">MapOverlay</string>
+    <string name="google_maps_key">AIzaSyBMA30UXts64nWtjWfjbLFuOy9qR2gqGGY</string>
+    <string name="clear">Clear</string>
+    <string name="save">Save</string>
+    <string name="search">Search Draw</string>
+</resources>
