@@ -16,11 +16,4 @@
         android:visibility="gone">
     </FrameLayout>
 
-    <Button
-        android:id="@+id/btn_draw_State"
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:background="@android:color/transparent"
-        android:text="Search" />
-
 </FrameLayout>

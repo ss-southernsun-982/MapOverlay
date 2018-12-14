@@ -4,15 +4,15 @@ import android.Manifest;
 import android.annotation.SuppressLint;
 import android.content.Context;
 import android.content.DialogInterface;
+import android.content.IntentFilter;
 import android.content.pm.PackageManager;
-import android.graphics.Bitmap;
-import android.graphics.Canvas;
 import android.graphics.Point;
-import android.graphics.drawable.Drawable;
 import android.location.Location;
+import android.net.wifi.ScanResult;
+import android.net.wifi.WifiManager;
 import android.os.Build;
 import android.os.Bundle;
-import android.support.annotation.DrawableRes;
+import android.os.Handler;
 import android.support.annotation.NonNull;
 import android.support.annotation.Nullable;
 import android.support.v4.app.ActivityCompat;
@@ -25,7 +25,6 @@ import android.view.MenuInflater;
 import android.view.MenuItem;
 import android.view.MotionEvent;
 import android.view.View;
-import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.Toast;
 
@@ -40,7 +39,6 @@ import com.google.android.gms.maps.GoogleMap;
 import com.google.android.gms.maps.OnMapReadyCallback;
 import com.google.android.gms.maps.Projection;
 import com.google.android.gms.maps.SupportMapFragment;
-import com.google.android.gms.maps.model.BitmapDescriptor;
 import com.google.android.gms.maps.model.BitmapDescriptorFactory;
 import com.google.android.gms.maps.model.GroundOverlay;
 import com.google.android.gms.maps.model.GroundOverlayOptions;
@@ -55,17 +53,20 @@ import com.google.android.gms.maps.model.PolylineOptions;
 import com.google.maps.android.PolyUtil;
 
 import java.util.ArrayList;
+import java.util.List;
 
 public class MainActivity extends AppCompatActivity implements OnMapReadyCallback,
         GoogleApiClient.ConnectionCallbacks, GoogleApiClient.OnConnectionFailedListener,
-        LocationListener, View.OnTouchListener {
+        LocationListener, View.OnTouchListener, GoogleMap.OnMapLongClickListener, GoogleMap
+                .OnCameraMoveListener, GoogleMap.OnCameraMoveCanceledListener, GoogleMap
+                .OnCameraIdleListener, GoogleMap.OnCameraMoveStartedListener {
 
     //map
     private SupportMapFragment mapFragment;
     private GoogleApiClient googleApiClient;
     private LocationRequest locationRequest;
     private GoogleMap mMap;
-    private Location location;
+    private Location currentLocation;
     public static final int PLAY_SERVICE_RESOLUTION_REQUEST = 9000;
     private static final long UPDATE_INTERVAL = 5000;
     private Polyline polyline;
@@ -80,20 +81,18 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
     private ArrayList<LatLng> listLocation;
     private ArrayList<Polyline> polylineArrayList;
     String TAG = "DRAW MAP";
-    Button btn_draw_State;
     private Projection projection;
     private double latitude, longitude, myLat, myLng;
     private PolygonOptions rectOptions;
     private Polygon polygon;
-    private ArrayList<LatLong> listLatLong;
     private PolygonOptions polygonOptions;
     private MenuItem menuSearch;
-    private LatLngBounds latLngBounds;
     private int zoomWidth, zoomHeight, zoomPadding;
     private ArrayList<Marker> markers;
     private GroundOverlayOptions newarkMap;
     private GroundOverlay imageOverlay;
-
+    private LatLngBounds bounds;
+    private ArrayList<LatLng> listLocationInsideScreen;
     //permission
     private ArrayList<String> permissionToRequest;
     private ArrayList<String> permissionRejected = new ArrayList<>();
@@ -103,37 +102,42 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
     private static final int ALL_PERMISSION_RESULT = 912;
     private boolean isMaptouched = false;
 
+    //Scan wifi 9.0
+
+    private boolean mLocationPermissionApproved = false;
+    List<ScanResult> mAccessPointsSupporting80211mc;
+    private WifiManager mWifiManager;
+    private WifiScanReceiver mWifiScanReceiver;
+
+
+    private Boolean typeSearch = true;
+    private ArrayList<LatLng> listList = new ArrayList<>();
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
         getPermission();
+        mAccessPointsSupporting80211mc = new ArrayList<>();
+
+        mWifiManager = (WifiManager) getApplicationContext().getSystemService(Context.WIFI_SERVICE);
+        mWifiScanReceiver = new WifiScanReceiver(mWifiManager, mLocationPermissionApproved,
+                mAccessPointsSupporting80211mc);
         zoomWidth = getResources().getDisplayMetrics().widthPixels;
         zoomHeight = getResources().getDisplayMetrics().heightPixels;
-        zoomPadding = 30; // offset from edges of the map 12% of screen
+        zoomPadding = 5; // offset from edges of the map 12% of screen
 
         mapFragment = (SupportMapFragment) getSupportFragmentManager()
                 .findFragmentById(R.id.map);
         mapFragment.getMapAsync(this);
         fram_map = (FrameLayout) findViewById(R.id.fram_map);
-        btn_draw_State = (Button) findViewById(R.id.btn_draw_State);
         mapMove = false;
         listLocation = new ArrayList<>();
         listLocationDraw = new ArrayList<>();
-        listLatLong = new ArrayList<>();
         polylineArrayList = new ArrayList<>();
+        listLocationInsideScreen = new ArrayList<>();
         markers = new ArrayList<>();
-        btn_draw_State.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                btn_draw_State.setText("Draw");
-                mapMove = !mapMove;
-                polygonOptions = new PolygonOptions();
-                clearDrawing();
-                fram_map.setVisibility(View.VISIBLE);
-            }
-        });
         fram_map.setOnTouchListener(this);
     }
 
@@ -179,6 +183,7 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         if (googleApiClient != null) {
             googleApiClient.connect();
         }
+        Log.d("LIFE_Cyrcle", "Start");
     }
 
     @Override
@@ -187,6 +192,9 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         if (!checkPlayService()) {
             Toast.makeText(this, "Install play service", Toast.LENGTH_SHORT).show();
         }
+        registerReceiver(
+                mWifiScanReceiver, new IntentFilter(WifiManager.SCAN_RESULTS_AVAILABLE_ACTION));
+        Log.d("LIFE_Cyrcle", "Resum");
     }
 
     @Override
@@ -195,6 +203,25 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         if (googleApiClient != null && googleApiClient.isConnected()) {
             LocationServices.FusedLocationApi.removeLocationUpdates(googleApiClient, this);
             googleApiClient.disconnect();
+        }
+        unregisterReceiver(mWifiScanReceiver);
+        Log.d("LIFE_Cyrcle", "Pause");
+    }
+
+    @Override
+    protected void onStop() {
+        super.onStop();
+        Log.d("LIFE_Cyrcle", "Stop");
+    }
+
+    public void onClickFindDistancesToAccessPoints(View view) {
+        if (mLocationPermissionApproved) {
+            Toast.makeText(this, "No wifi connection", Toast.LENGTH_SHORT).show();
+            mWifiManager.startScan();
+
+        } else {
+            // On 23+ (M+) devices, fine location permission not granted. Request permission.
+            Toast.makeText(this, "Location permission", Toast.LENGTH_SHORT).show();
         }
     }
 
@@ -215,56 +242,24 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
     @Override
     public void onMapReady(GoogleMap googleMap) {
         mMap = googleMap;
+        mMap.setOnMapLongClickListener(this);
         mMap.setMyLocationEnabled(true);
         mMap.getUiSettings().setZoomControlsEnabled(true);
         mMap.getUiSettings().setZoomGesturesEnabled(true);
         mMap.setMaxZoomPreference(50f);
         mMap.setTrafficEnabled(false);
-        final LatLngBounds newarkBounds = new LatLngBounds(
+        bounds = new LatLngBounds(
                 new LatLng(10.385022, 106.361557),  //s
                 new LatLng(11.174867, 107.019938)); //n
         newarkMap = new GroundOverlayOptions()
                 .image(BitmapDescriptorFactory.fromResource(R.drawable.maphcm))
-                .positionFromBounds(newarkBounds)
+                .positionFromBounds(bounds)
                 .transparency(0.0f);
         imageOverlay = mMap.addGroundOverlay(newarkMap);
-        mMap.setOnCameraIdleListener(new GoogleMap.OnCameraIdleListener() {
-            @Override
-            public void onCameraIdle() {
-                int zoom = Math.round(mMap.getCameraPosition().zoom);
-                if (zoom > 13) {
-                    if (mMap.getMapType() != GoogleMap.MAP_TYPE_SATELLITE)
-                        mMap.setMapType(mMap.MAP_TYPE_SATELLITE);
-                    if (mMap.isTrafficEnabled() == true) mMap.setTrafficEnabled(false);
-                    imageOverlay.setTransparency(1.0f);
-                } else if (zoom > 8 && zoom < 14) {
-                    if (mMap.getMapType() != GoogleMap.MAP_TYPE_NORMAL)
-                        mMap.setMapType(mMap.MAP_TYPE_NORMAL);
-                    if (mMap.isTrafficEnabled() == false) mMap.setTrafficEnabled(true);
-                    float op = 0.0f;
-                    switch (zoom) {
-                        case 9:
-                        case 13:
-                            op = 0.6f;
-                            break;
-                        case 10:
-                        case 12:
-                            op = 0.3f;
-                            break;
-                        case 11:
-                            op = 0.0f;
-                            break;
-                        default:
-                            op = 0.0f;
-                            break;
-                    }
-                    imageOverlay.setTransparency(op);
-                } else if (zoom < 9) {
-                    if (mMap.isTrafficEnabled() == false) mMap.setTrafficEnabled(true);
-                    imageOverlay.setTransparency(1.0f);
-                }
-            }
-        });
+        mMap.setOnCameraMoveListener(this);
+        mMap.setOnCameraMoveCanceledListener(this);
+        mMap.setOnCameraIdleListener(this);
+        mMap.setOnCameraMoveStartedListener(this);
         listLocation.add(new LatLng(10.827316269863829, 106.79021503776312));
         listLocation.add(new LatLng(10.968236781111319, 106.74283649772406));
         listLocation.add(new LatLng(10.76526305891829, 106.61237418651581));
@@ -273,31 +268,9 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         listLocation.add(new LatLng(10.855640641428007, 106.47023856639862));
         listLocation.add(new LatLng(10.745700155039904, 106.63022696971893));
         listLocation.add(new LatLng(10.825967423408425, 106.65219962596893));
+        listLocation.add(new LatLng(11.3858050455127, 106.11773259937765));
+        listLocation.add(new LatLng(11.956645507742296, 106.06934119015932));
         addMarker(listLocation);
-    }
-
-    public void addMarker(ArrayList<LatLng> list) {
-        for (int i = 0; i < list.size(); i++) {
-            Marker marker = mMap.addMarker(new MarkerOptions().position(list.get(i)).icon
-                    (bitmapDescriptorFromVector(this, R.drawable
-                            .add_location_black_24dp)));
-            markers.add(marker);
-        }
-    }
-
-    private BitmapDescriptor bitmapDescriptorFromVector(Context context, @DrawableRes int
-            vectorDrawableResourceId) {
-        Drawable background = ContextCompat.getDrawable(context, vectorDrawableResourceId);
-        background.setBounds(0, 0, background.getIntrinsicWidth(), background.getIntrinsicHeight());
-        Drawable vectorDrawable = ContextCompat.getDrawable(context, vectorDrawableResourceId);
-        vectorDrawable.setBounds(40, 20, vectorDrawable.getIntrinsicWidth() + 40, vectorDrawable
-                .getIntrinsicHeight() + 20);
-        Bitmap bitmap = Bitmap.createBitmap(background.getIntrinsicWidth(), background
-                .getIntrinsicHeight(), Bitmap.Config.ARGB_8888);
-        Canvas canvas = new Canvas(bitmap);
-        background.draw(canvas);
-        vectorDrawable.draw(canvas);
-        return BitmapDescriptorFactory.fromBitmap(bitmap);
     }
 
     @Override
@@ -306,8 +279,7 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
             myLat = location.getLatitude();
             myLng = location.getLongitude();
             if (mMap != null) {
-                mMap.addMarker(new MarkerOptions().position(new LatLng(myLat, myLng)).icon
-                        (bitmapDescriptorFromVector(this, R.drawable.ic_location_on_blue_24dp)));
+                mMap.addMarker(new MarkerOptions().position(new LatLng(myLat, myLng)));
                 mMap.moveCamera(CameraUpdateFactory.newLatLng(new LatLng(myLat, myLng)));
                 mMap.animateCamera(CameraUpdateFactory.zoomTo(10f));
             }
@@ -321,8 +293,8 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
                 Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
             return;
         }
-        location = LocationServices.FusedLocationApi.getLastLocation(googleApiClient);
-        if (location != null) {
+        currentLocation = LocationServices.FusedLocationApi.getLastLocation(googleApiClient);
+        if (currentLocation != null) {
         }
 
         getLocationUpdate();
@@ -403,9 +375,6 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
             LatLng latLng = mMap.getProjection().fromScreenLocation(x_y_points);
             latitude = latLng.latitude;
             longitude = latLng.longitude;
-            LatLong bean = new LatLong(String.valueOf(latitude), String.valueOf(longitude), "3");
-            listLatLong.add(bean);
-
 
             System.out.println("LatLng : " + latitude + " : " + longitude);
 
@@ -434,13 +403,11 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
 //                            System.out.println("ACTION_UP");
                     if (!screenLeave) {
                         screenLeave = true;
-                        btn_draw_State.setText("Drawing...");
                         menuSearch.setTitle("Drawing...");
                     } else {
                         mapMove = false; // to detect map is movable
                         source = 0;
                         destination = 1;
-                        btn_draw_State.setText("Search");
                         menuSearch.setTitle("Search Draw");
 //                        drawMapFinal();
                         if (listLocationDraw.size() > 5) {
@@ -479,54 +446,6 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         }
     }
 
-    private void drawPolygon() {
-        for (int i = 0; i < polylineArrayList.size(); i++) {
-            polylineArrayList.get(i).remove();
-        }
-        LatLngBounds.Builder builder = new LatLngBounds.Builder();
-        listLocationDraw.add(listLocationDraw.get(0));
-        for (int i = 0; i < listLocationDraw.size(); i++) {
-            builder.include(new LatLng(listLocationDraw.get(i).latitude, listLocationDraw.get(i)
-                    .longitude));
-        }
-        LatLngBounds bounds = builder.build();
-        checkLocationInsideDraw(bounds);
-        mMap.animateCamera(CameraUpdateFactory.newLatLngBounds(bounds, zoomWidth,
-                zoomHeight, zoomPadding));
-        polygonOptions.addAll(listLocationDraw);
-        polygonOptions.strokeColor(ContextCompat.getColor(this, R.color.colorRed));
-        polygonOptions.strokeWidth(4);
-        polygon = mMap.addPolygon(polygonOptions);
-    }
-
-    public void checkLocationInsideDraw(LatLngBounds bounds) {
-        for (int i = 0; i < markers.size(); i++) {
-            markers.get(i).remove();
-        }
-        markers.clear();
-        ArrayList<LatLng> latLngs = new ArrayList<>();
-        ArrayList<LatLng> latLngs2 = new ArrayList<>();
-        for (int i = 0; i < listLocation.size(); i++) {
-            if (bounds.contains(listLocation.get(i))) {
-                latLngs.add(listLocation.get(i));
-//
-            }
-            boolean isInside = PolyUtil.containsLocation(listLocation.get(i), listLocationDraw, true);
-            if (isInside) latLngs2.add(listLocation.get(i));
-        }
-        Log.d("OUSIDE", " " + latLngs2.size());
-        addMarker(latLngs2);
-    }
-
-    public void clearDrawing() {
-        if (listLocationDraw.size() >= 0 && listLatLong.size() >= 0 && polyline != null &&
-                polygon != null) {
-            listLocationDraw.clear();
-            listLatLong.clear();
-            polygon.remove();
-        }
-    }
-
     @Override
     public boolean onCreateOptionsMenu(Menu menu) {
         MenuInflater inflater = getMenuInflater();
@@ -540,13 +459,14 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
         Boolean search = false;
         switch (item.getItemId()) {
             case R.id.menu_clear:
-                if (polyline != null) {
-                    clearDrawing();
-                }
+                clearDrawing();
+                typeSearch = true;
                 break;
             case R.id.menu_search:
+                typeSearch = false;
                 menuSearch = item.setTitle("Draw");
                 mapMove = !mapMove;
+                Log.d("SEARCH_SSSSSSSSSSSS", typeSearch + " button");
                 polygonOptions = new PolygonOptions();
                 clearDrawing();
                 fram_map.setVisibility(View.VISIBLE);
@@ -555,5 +475,162 @@ public class MainActivity extends AppCompatActivity implements OnMapReadyCallbac
                 break;
         }
         return super.onOptionsItemSelected(item);
+    }
+
+    @Override
+    public void onMapLongClick(LatLng latLng) {
+        Log.d("LOcationImage", latLng.latitude + "," + latLng.longitude);
+    }
+
+    @Override
+    public void onCameraMoveCanceled() {
+        Log.d("MOVE_CAMERA", "camera move cancel");
+    }
+
+    @Override
+    public void onCameraMove() {
+        Log.d("MOVE_CAMERA", "camera move");
+    }
+
+    @Override
+    public void onCameraMoveStarted(int reason) {
+        if (reason == GoogleMap.OnCameraMoveStartedListener.REASON_GESTURE) {
+            Log.d("MOVEEE", "The user gestured on the map.");
+        } else if (reason == GoogleMap.OnCameraMoveStartedListener
+                .REASON_API_ANIMATION) {
+            Log.d("MOVEEE", "The user tapped something on the map.");
+        } else if (reason == GoogleMap.OnCameraMoveStartedListener
+                .REASON_DEVELOPER_ANIMATION) {
+            Log.d("MOVEEE", "The app moved the camera.");
+        }
+        if (typeSearch) {
+            showInBoundsScreen();
+            Log.d("SEARCH_SSSSSSSSSSSS", typeSearch + " map");
+        }
+        Toast.makeText(this, "stated 1", Toast.LENGTH_SHORT).show();
+        Log.d("OOOOOOOO", "stated 1");
+    }
+
+    @Override
+    public void onCameraIdle() {
+        int zoom = Math.round(mMap.getCameraPosition().zoom);
+        if (zoom > 13) {
+            if (mMap.getMapType() != GoogleMap.MAP_TYPE_SATELLITE)
+                mMap.setMapType(mMap.MAP_TYPE_SATELLITE);
+            if (mMap.isTrafficEnabled() == true) mMap.setTrafficEnabled(false);
+            imageOverlay.setTransparency(1.0f);
+        } else if (zoom > 8 && zoom < 14) {
+            if (mMap.getMapType() != GoogleMap.MAP_TYPE_NORMAL)
+                mMap.setMapType(mMap.MAP_TYPE_NORMAL);
+            if (mMap.isTrafficEnabled() == false) mMap.setTrafficEnabled(true);
+            float op = 0.0f;
+            switch (zoom) {
+                case 9:
+                case 13:
+                    op = 0.6f;
+                    break;
+                case 10:
+                case 12:
+                    op = 0.3f;
+                    break;
+                case 11:
+                    op = 0.0f;
+                    break;
+                default:
+                    op = 0.0f;
+                    break;
+            }
+            imageOverlay.setTransparency(op);
+        } else if (zoom < 9) {
+            if (mMap.isTrafficEnabled() == false) mMap.setTrafficEnabled(true);
+            imageOverlay.setTransparency(1.0f);
+        }
+        Log.d("OOOOOOOO", "stated 2");
+        new Handler().postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                Log.d("OOOOOOOO", "stated 2 delay");
+            }
+        }, 2000);
+    }
+
+    public void showInBoundsScreen() {
+        bounds = mMap.getProjection().getVisibleRegion().latLngBounds;
+        listLocationInsideScreen.clear();
+        for (int i = 0; i < listLocation.size(); i++) {
+            if (bounds.contains(listLocation.get(i))) {
+                //point is visible
+                listLocationInsideScreen.add(listLocation.get(i));
+            }
+        }
+        if (listLocationInsideScreen.size() > 0) {
+            addMarker(listLocationInsideScreen);
+            Log.d("FIND_SCREEN", "------>" + listLocationInsideScreen.size());
+        } else {
+            Toast.makeText(this, "Isn't location in here", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    private void drawPolygon() {
+        checkLocationInsideDraw();
+        for (int i = 0; i < polylineArrayList.size(); i++) {
+            polylineArrayList.get(i).remove();
+        }
+        markers.clear();
+        listLocationDraw.add(listLocationDraw.get(0));
+        polygonOptions.addAll(listLocationDraw);
+        polygonOptions.strokeColor(ContextCompat.getColor(this, R.color.colorRed));
+        polygonOptions.strokeWidth(4);
+        polygon = mMap.addPolygon(polygonOptions);
+        LatLngBounds.Builder builder = new LatLngBounds.Builder();
+        for (int i = 0; i < listLocationDraw.size(); i++) {
+            builder.include(listLocationDraw.get(i));
+        }
+        LatLngBounds bounds1 = builder.build();
+        mMap.animateCamera(CameraUpdateFactory.newLatLngBounds(bounds1, zoomHeight,
+                zoomWidth, zoomPadding));
+    }
+
+    public void checkLocationInsideDraw() {
+        ArrayList<LatLng> latLngs = new ArrayList<>();
+        for (int i = 0; i < listLocation.size(); i++) {
+            boolean isInside = PolyUtil.containsLocation(listLocation.get(i), listLocationDraw,
+                    true);
+            if (isInside) {
+                latLngs.add(listLocation.get(i));
+            }
+        }
+        Log.d("INSIDE", " " + latLngs.size());
+        if (latLngs.size() == 0) {
+            Toast.makeText(this, "Not location you want", Toast.LENGTH_SHORT).show();
+        } else {
+            addMarker(latLngs);
+        }
+    }
+
+    public void clearDrawing() {
+        if (listLocationDraw.size() >= 0 && polyline != null &&
+                polygon != null) {
+            listLocationDraw.clear();
+            polygon.remove();
+        }
+        addMarker(listLocation);
+    }
+
+    public void addMarker(ArrayList<LatLng> list) {
+        LatLngBounds.Builder builder = new LatLngBounds.Builder();
+        for (int i = 0; i < markers.size(); i++) {
+            markers.get(i).remove();
+        }
+        markers.clear();
+        for (int i = 0; i < list.size(); i++) {
+            Marker marker = mMap.addMarker(new MarkerOptions().position(list.get(i)).icon
+                    (BitmapDescriptorFactory.fromResource(R.drawable.ic_add_location_black_24dp)));
+            markers.add(marker);
+            builder.include(list.get(i));
+        }
+        bounds = builder.build();
+        mMap.animateCamera(CameraUpdateFactory.newLatLngBounds(bounds, zoomHeight,
+                zoomWidth, zoomPadding));
     }
 }

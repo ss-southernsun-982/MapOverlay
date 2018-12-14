@@ -1,12 +1,12 @@
 package com.example.namtn.mapoverlay;
 
-class LatLong {
+class PositionLatLng {
 
     private String Post_lat;
     private String Post_long;
     private String Source_id;
 
-    public LatLong(String post_lat, String post_long, String source_id) {
+    public PositionLatLng(String post_lat, String post_long, String source_id) {
         Post_lat = post_lat;
         Post_long = post_long;
         Source_id = source_id;
